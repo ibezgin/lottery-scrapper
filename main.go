@@ -13,6 +13,11 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
+type LotteryItem struct {
+	Prize string `json:"prize"`
+	Move  string `json:"move"`
+}
+
 func main() {
 	// 1. Скачиваем/убеждаемся в наличии браузера Chromium
 	chromePath, err := setupBrowser()
@@ -20,7 +25,31 @@ func main() {
 		log.Fatal("Ошибка при настройке браузера:", err)
 	}
 
-	// 2. Опции запуска Chrome
+	// 2. Настраиваем контекст chromedp
+	ctx, allocCancel, ctxCancel := getChromedpContext(chromePath)
+	defer allocCancel()
+	defer ctxCancel()
+
+	url := "https://nloto.ru/lottery/mechtallion/rules"
+
+	// 3. Выполнение действий в браузере
+	items, err := scrapeLotteryData(ctx, url)
+	if err != nil {
+		log.Fatal("Ошибка при выполнении chromedp:", err)
+	}
+
+	// 4. Сохраняем в XLSX
+	filename := "results.xlsx"
+	if err := saveToExcel(items, filename); err != nil {
+		log.Fatal("Ошибка при сохранении XLSX:", err)
+	}
+
+	fmt.Printf("Успешно извлечено %d записей и сохранено в %s\n", len(items), filename)
+	fmt.Println("Скрапинг завершен.")
+}
+
+func getChromedpContext(chromePath string) (context.Context, context.CancelFunc, context.CancelFunc) {
+	// Опции запуска Chrome
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(chromePath),   // Используем скачанный путь
 		chromedp.Flag("headless", true), // Без оконного режима (headless)
@@ -31,31 +60,30 @@ func main() {
 		chromedp.UserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"),
 	)
 
-	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
-	defer cancel()
+	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
 
-	// 3. Создаем контекст chromedp
-	ctx, cancel := chromedp.NewContext(
+	// Создаем контекст chromedp
+	ctx, ctxCancel := chromedp.NewContext(
 		allocCtx,
 		chromedp.WithLogf(log.Printf),
 	)
-	defer cancel()
 
-	// 4. Устанавливаем таймаут на выполнение всей задачи
-	ctx, cancel = context.WithTimeout(ctx, 120*time.Second)
-	defer cancel()
+	// Устанавливаем таймаут на выполнение всей задачи
+	ctx, timeoutCancel := context.WithTimeout(ctx, 120*time.Second)
 
-	url := "https://nloto.ru/lottery/mechtallion/rules"
-
-	fmt.Printf("Переход на страницу: %s\n", url)
-
-	// 5. Выполнение действий в браузере
-	var items []struct {
-		Prize string `json:"prize"`
-		Move  string `json:"move"`
+	combinedCtxCancel := func() {
+		timeoutCancel()
+		ctxCancel()
 	}
 
-	err = chromedp.Run(ctx,
+	return ctx, allocCancel, combinedCtxCancel
+}
+
+func scrapeLotteryData(ctx context.Context, url string) ([]LotteryItem, error) {
+	fmt.Printf("Переход на страницу: %s\n", url)
+
+	var items []LotteryItem
+	err := chromedp.Run(ctx,
 		chromedp.Navigate(url),
 		// Ждем, пока элемент с нужным классом появится в DOM
 		chromedp.WaitVisible(`.LQnNN`, chromedp.ByQuery),
@@ -69,11 +97,10 @@ func main() {
 		`, &items),
 	)
 
-	if err != nil {
-		log.Fatal("Ошибка при выполнении chromedp:", err)
-	}
+	return items, err
+}
 
-	// 6. Формируем XLSX
+func saveToExcel(items []LotteryItem, filename string) error {
 	f := excelize.NewFile()
 	defer func() {
 		if err := f.Close(); err != nil {
@@ -84,7 +111,7 @@ func main() {
 	sheetName := "Results"
 	index, err := f.NewSheet(sheetName)
 	if err != nil {
-		log.Fatal("Не удалось создать лист в XLSX:", err)
+		return fmt.Errorf("не удалось создать лист в XLSX: %w", err)
 	}
 	f.SetActiveSheet(index)
 	// Удаляем стандартный Sheet1, если он есть
@@ -103,12 +130,11 @@ func main() {
 		}
 	}
 
-	if err := f.SaveAs("results.xlsx"); err != nil {
-		log.Fatal("Не удалось сохранить XLSX файл:", err)
+	if err := f.SaveAs(filename); err != nil {
+		return fmt.Errorf("не удалось сохранить XLSX файл: %w", err)
 	}
 
-	fmt.Printf("Успешно извлечено %d записей и сохранено в results.xlsx\n", len(items))
-	fmt.Println("Скрапинг завершен.")
+	return nil
 }
 
 func setupBrowser() (string, error) {
