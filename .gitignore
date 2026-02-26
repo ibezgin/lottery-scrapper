@@ -37,3 +37,4 @@ go.work.sum
 /browser
 
 .output.txt
+results.csv

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"fmt"
 	"log"
 	"os"
@@ -44,25 +45,54 @@ func main() {
 	ctx, cancel = context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
-	var result string
 	url := "https://nloto.ru/lottery/mechtallion/rules"
 
 	fmt.Printf("Переход на страницу: %s\n", url)
 
 	// 5. Выполнение действий в браузере
+	var items []struct {
+		Prize string `json:"prize"`
+		Move  string `json:"move"`
+	}
+
 	err = chromedp.Run(ctx,
 		chromedp.Navigate(url),
 		// Ждем, пока элемент с нужным классом появится в DOM
-		chromedp.WaitVisible(`.sc-b3db3955-0`, chromedp.ByQuery),
-		// Извлекаем текст элемента
-		chromedp.Text(`.sc-b3db3955-0`, &result, chromedp.ByQuery),
+		chromedp.WaitVisible(`.LQnNN`, chromedp.ByQuery),
+		// Извлекаем данные через JS
+		chromedp.Evaluate(`
+			Array.from(document.querySelectorAll('.bpONIu')).map(el => {
+				const prize = el.querySelector('.bzquVz')?.innerText || "";
+				const move = el.querySelector('.jMNgrd')?.innerText || "";
+				return { prize, move };
+			})
+		`, &items),
 	)
 
 	if err != nil {
 		log.Fatal("Ошибка при выполнении chromedp:", err)
 	}
 
-	fmt.Printf("Найдено содержимое (sc-b3db3955-0):\n%s\n", result)
+	// 6. Формируем CSV
+	csvFile, err := os.Create("results.csv")
+	if err != nil {
+		log.Fatal("Не удалось создать CSV файл:", err)
+	}
+	defer csvFile.Close()
+
+	writer := csv.NewWriter(csvFile)
+	defer writer.Flush()
+
+	// Заголовок
+	_ = writer.Write([]string{"Номер хода", "Размер выигрыша"})
+
+	for _, item := range items {
+		if item.Move != "" && item.Prize != "" {
+			_ = writer.Write([]string{item.Move, item.Prize})
+		}
+	}
+
+	fmt.Printf("Успешно извлечено %d записей и сохранено в results.csv\n", len(items))
 	fmt.Println("Скрапинг завершен.")
 }
 
