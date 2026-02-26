@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/csv"
 	"fmt"
 	"log"
 	"os"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/chromedp/chromedp"
 	"github.com/playwright-community/playwright-go"
+	"github.com/xuri/excelize/v2"
 )
 
 func main() {
@@ -73,26 +73,41 @@ func main() {
 		log.Fatal("Ошибка при выполнении chromedp:", err)
 	}
 
-	// 6. Формируем CSV
-	csvFile, err := os.Create("results.csv")
-	if err != nil {
-		log.Fatal("Не удалось создать CSV файл:", err)
-	}
-	defer csvFile.Close()
+	// 6. Формируем XLSX
+	f := excelize.NewFile()
+	defer func() {
+		if err := f.Close(); err != nil {
+			log.Println("Ошибка при закрытии файла XLSX:", err)
+		}
+	}()
 
-	writer := csv.NewWriter(csvFile)
-	defer writer.Flush()
+	sheetName := "Results"
+	index, err := f.NewSheet(sheetName)
+	if err != nil {
+		log.Fatal("Не удалось создать лист в XLSX:", err)
+	}
+	f.SetActiveSheet(index)
+	// Удаляем стандартный Sheet1, если он есть
+	_ = f.DeleteSheet("Sheet1")
 
 	// Заголовок
-	_ = writer.Write([]string{"Номер хода", "Размер выигрыша"})
+	_ = f.SetCellValue(sheetName, "A1", "Номер хода")
+	_ = f.SetCellValue(sheetName, "B1", "Размер выигрыша")
 
+	row := 2
 	for _, item := range items {
 		if item.Move != "" && item.Prize != "" {
-			_ = writer.Write([]string{item.Move, item.Prize})
+			_ = f.SetCellValue(sheetName, fmt.Sprintf("A%d", row), item.Move)
+			_ = f.SetCellValue(sheetName, fmt.Sprintf("B%d", row), item.Prize)
+			row++
 		}
 	}
 
-	fmt.Printf("Успешно извлечено %d записей и сохранено в results.csv\n", len(items))
+	if err := f.SaveAs("results.xlsx"); err != nil {
+		log.Fatal("Не удалось сохранить XLSX файл:", err)
+	}
+
+	fmt.Printf("Успешно извлечено %d записей и сохранено в results.xlsx\n", len(items))
 	fmt.Println("Скрапинг завершен.")
 }
 
